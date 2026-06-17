@@ -1,0 +1,145 @@
+generator client {
+    provider = "prisma-client-js"
+}
+
+datasource db {
+    provider = "postgresql"
+}
+
+enum ReservationStatus {
+    PENDING
+    CONFIRMED
+    CANCELLED
+}
+
+enum AuthProvider {
+    LOCAL
+    GOOGLE
+}
+
+enum UserRole {
+    ADMIN
+    CUSTOMER
+}
+
+model User {
+    id String @id @default(uuid())
+
+    email String  @unique
+    name  String?
+
+    password String?
+
+    provider AuthProvider @default(LOCAL)
+    googleId String?      @unique
+
+    profileImageUrl String?
+
+    role UserRole @default(CUSTOMER)
+
+    refreshToken String?
+
+    reservations Reservation[]
+
+    createdInventories RoomInventory[] @relation("InventoryCreator")
+
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+}
+
+model RoomType {
+    id String @id @default(uuid())
+
+    name        String
+    description String?
+
+    size  Int
+    price Decimal @db.Decimal(10, 2)
+
+    totalCount Int
+
+    normalCapacity Int
+    maxCapacity    Int
+
+    discountPercent Int @default(0)
+
+    images    RoomImage[]
+    isDeleted Boolean     @default(false)
+    deletedAt DateTime?
+
+    reservations Reservation[]
+    inventories  RoomInventory[]
+
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+}
+
+model RoomImage {
+    id String @id @default(uuid())
+
+    imageUrl String
+    publicId String?
+
+    roomTypeId String
+    roomType   RoomType @relation(fields: [roomTypeId], references: [id], onDelete: Cascade)
+
+    createdAt DateTime @default(now())
+
+    @@index([roomTypeId])
+}
+
+model Reservation {
+    id String @id @default(uuid())
+
+    userId String
+    user   User   @relation(fields: [userId], references: [id])
+
+    roomTypeId String
+    roomType   RoomType @relation(fields: [roomTypeId], references: [id])
+
+    checkIn  DateTime @db.Date
+    checkOut DateTime @db.Date
+
+    roomCount Int @default(1)
+
+    adults   Int
+    children Int
+    babies   Int
+
+    basePrice  Decimal @db.Decimal(10, 2)
+    extraFee   Decimal @default(0) @db.Decimal(10, 2)
+    discount   Int     @default(0)
+    totalPrice Decimal @db.Decimal(10, 2)
+
+    status ReservationStatus @default(PENDING)
+
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    @@index([roomTypeId])
+    @@index([userId])
+}
+
+model RoomInventory {
+    id String @id @default(uuid())
+
+    roomTypeId String
+    roomType   RoomType @relation(fields: [roomTypeId], references: [id], onDelete: Cascade)
+
+    date DateTime @db.Date
+
+    availableCount Int
+    blockedCount   Int @default(0)
+
+    createdById String?
+    createdBy   User?   @relation("InventoryCreator", fields: [createdById], references: [id])
+
+    reason String?
+
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    @@unique([roomTypeId, date])
+    @@index([roomTypeId, date])
+    @@index([date])
+}

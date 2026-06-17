@@ -1,0 +1,247 @@
+import {
+  BadRequestException,
+  Injectable,
+  UnauthorizedException,
+} from '@nestjs/common';
+
+import * as bcrypt from 'bcrypt';
+
+import { PrismaService } from 'src/prisma/prisma/prisma.service';
+import { RegisterDto } from './dtos/register.dto';
+import { JwtService } from '@nestjs/jwt';
+import { ConfigService } from '@nestjs/config';
+import { User } from '@prisma/client';
+import { randomBytes } from 'crypto';
+import { AuthResponse } from './dtos/auth-response';
+import { LoginDto } from './dtos/login.dto';
+import axios from 'axios';
+
+@Injectable()
+export class AuthService {
+    
+   private readonly SALT_ROUNDS = 12;
+  constructor(
+    private readonly prismaService: PrismaService,
+    private jwtService: JwtService,
+    private configService: ConfigService,
+    private readonly prisma: PrismaService
+  ) {}
+
+
+  // =========================
+  // CREATE USER
+  // =========================
+  async createUser(
+    data: RegisterDto,
+  ) {
+    try{
+        const existingUser =
+      await this.prisma.user.findUnique({
+        where: {
+          email: data.email,
+        },
+      });
+
+    if (existingUser) {
+      throw new BadRequestException(
+        'Email already exists',
+      );
+    }
+
+    const hashedPassword =
+      await bcrypt.hash(data.password, 10);
+
+    const user =
+      await this.prisma.user.create({
+        data: {
+          email: data.email,
+          name: data.name,
+          password: hashedPassword,
+        },
+
+        select: {
+          id: true,
+          email: true,
+          name: true,
+          role: true,
+          createdAt: true,
+        },
+      });
+
+     const tokens = await this.generateTokens(user);
+        // Store the refresh token in the database
+        await this.updateRefreshToken(user.id, tokens.refreshToken);
+
+  return {
+        ...tokens,
+        user,
+      };
+    }catch(error){
+        console.error('Error creating user:', error);
+        throw new BadRequestException('Failed to create user');
+    }
+  }
+
+  // =========================
+  // FIND USER BY EMAIL
+  // =========================
+  async findByEmail(
+    email: string,
+  ) {
+    return this.prisma.user.findUnique({
+      where: {
+        email,
+      },
+    });
+  }
+
+  // =========================
+  // FIND USER BY ID
+  // =========================
+  async findById(id: string) {
+    return this.prisma.user.findUnique({
+      where: {
+        id,
+      },
+    });
+  }
+   async generateTokens(
+    user: Omit<User, 'password' | 'refreshToken' | 'createdAt' | 'updatedAt'| 'googleId'| 'profileImageUrl'|'provider'>,
+  ): Promise<{ accessToken: string; refreshToken: string }> {
+    // Implement JWT token generation logic here
+    const payload = { sub: user.id, email: user.email, role: user.role };
+    const refreshId = randomBytes(16).toString('hex');
+    console.log(`JWT Secret Refresh is ${this.configService.get<string>("JWT_SECRET_REFRESH")}`);
+    
+    const [accessToken, refreshToken] = await Promise.all([
+        this.jwtService.signAsync(payload, {
+            secret: this.configService.get<string>('JWT_SECRET'),
+            expiresIn: this.configService.get<number>('JWT_EXPIRES_IN'),
+        }), 
+        this.jwtService.signAsync({ ...payload, refreshId }, {
+            secret: this.configService.get<string>('JWT_REFRESH_SECRET'),
+            expiresIn: this.configService.get< number>('JWT_REFRESH_EXPIRES_IN'),
+        })
+    ]);
+    return { accessToken, refreshToken };
+  }
+
+   async updateRefreshToken(
+    userId: string,
+    refreshToken: string,
+  ): Promise<void> {
+    await this.prismaService.user.update({
+      where: { id: userId },
+      data: { refreshToken },
+    });
+  }
+  async refreshTokens(userId: string): Promise<AuthResponse> {
+    const user = await this.prismaService.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        email: true,
+        name: true,  
+        role: true,
+      },
+    });
+
+    if (!user) {
+      throw new UnauthorizedException('User not found');
+    }
+
+    const tokens = await this.generateTokens(user);
+    await this.updateRefreshToken(user.id, tokens.refreshToken);
+
+    return {
+      ...tokens,
+      user,
+    };
+  }
+  
+async login(loginDto: LoginDto): Promise<AuthResponse> {
+    const { email, password } = loginDto;
+
+    const user = await this.prismaService.user.findUnique({
+      where: { email },
+    });
+
+    if (!user || !(await bcrypt.compare(password, user.password))) {
+      throw new UnauthorizedException('Invalid email or password');
+    }
+
+    const tokens = await this.generateTokens(user);
+    await this.updateRefreshToken(user.id, tokens.refreshToken);
+
+    return {
+      ...tokens,
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        role: user.role,
+      },
+    };
+  }
+  async logout(id: string): Promise<void> {
+    if (!id) {
+    throw new Error("id is missing in logout");
+  }
+    await this.prismaService.user.update({
+      where: { id },
+      data: { refreshToken: null },
+    });
+  }
+async googleLogin(
+  googleAccessToken: string,
+): Promise<AuthResponse> {
+  const response = await axios.get(
+    "https://www.googleapis.com/oauth2/v3/userinfo",
+    {
+      headers: {
+        Authorization: `Bearer ${googleAccessToken}`,
+      },
+    },
+  );
+
+  const googleUser = response.data;
+
+  let user =
+    await this.prisma.user.findUnique({
+      where: {
+        email: googleUser.email,
+      },
+    });
+
+  if (!user) {
+    user = await this.prisma.user.create({
+      data: {
+        email: googleUser.email,
+        name: googleUser.name,
+        googleId: googleUser.id,
+        provider: "GOOGLE",
+        profileImageUrl: googleUser.picture,
+      },
+    });
+  }
+
+  const tokens =
+    await this.generateTokens(user);
+
+  await this.updateRefreshToken(
+    user.id,
+    tokens.refreshToken,
+  );
+
+  return {
+    ...tokens,
+    user: {
+      id: user.id,
+      email: user.email,
+      profileImageUrl: user.profileImageUrl,
+      name: user.name,
+      role: user.role,
+    },
+  };
+}
+}
