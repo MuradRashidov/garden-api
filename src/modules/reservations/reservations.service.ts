@@ -7,20 +7,29 @@ import {
 import { PrismaService } from 'src/prisma/prisma/prisma.service';
 import { CreateReservationDto } from './dtos/create-reservation.dto';
 import { UpdateReservationDto } from './dtos/update-reservation.dto';
+import { NotificationType } from '@prisma/client';
+import { NotificationsGateway } from '../notifications/notifications.gateway';
 
 @Injectable()
 export class ReservationsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private notificationsGateway: NotificationsGateway,
+  ) {}
   async getAllReservations() {
     return this.prisma.reservation.findMany({
       include: {
+        user: true,
         roomType: true,
+      },
+      orderBy: {
+        createdAt: 'desc',
       },
     });
   }
   async getMyReservations(userId: string) {
     return this.prisma.reservation.findMany({
-      where: { userId },  
+      where: { userId },
       include: {
         roomType: true,
       },
@@ -162,43 +171,38 @@ export class ReservationsService {
   //     },
   //   });
   // }
-async createReservation(
-  data: CreateReservationDto & { userId: string },
-) {
-  // =========================
-  // ROOM TYPE
-  // =========================
-  const roomType = await this.prisma.roomType.findUnique({
-    where: {
-      id: data.roomTypeId,
-    },
-  });
+  async createReservation(data: CreateReservationDto & { userId: string }) {
+    // =========================
+    // ROOM TYPE
+    // =========================
+    const roomType = await this.prisma.roomType.findUnique({
+      where: {
+        id: data.roomTypeId,
+      },
+    });
 
-  if (!roomType) {
-    throw new NotFoundException('Room type not found');
-  }
+    if (!roomType) {
+      throw new NotFoundException('Room type not found');
+    }
 
-  // =========================
-  // DATES
-  // =========================
-  const start = new Date(data.checkIn);
-  const end = new Date(data.checkOut);
+    // =========================
+    // DATES
+    // =========================
+    const start = new Date(data.checkIn);
+    const end = new Date(data.checkOut);
 
-  if (isNaN(start.getTime()) || isNaN(end.getTime())) {
-    throw new BadRequestException('Invalid dates');
-  }
+    if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+      throw new BadRequestException('Invalid dates');
+    }
 
-  if (start >= end) {
-    throw new BadRequestException(
-      'Check-out must be after check-in',
-    );
-  }
+    if (start >= end) {
+      throw new BadRequestException('Check-out must be after check-in');
+    }
 
-  // =========================
-  // ALL OVERLAPPING RESERVATIONS
-  // =========================
-  const reservations =
-    await this.prisma.reservation.findMany({
+    // =========================
+    // ALL OVERLAPPING RESERVATIONS
+    // =========================
+    const reservations = await this.prisma.reservation.findMany({
       where: {
         roomTypeId: data.roomTypeId,
         status: {
@@ -213,11 +217,10 @@ async createReservation(
       },
     });
 
-  // =========================
-  // INVENTORY BLOCKS
-  // =========================
-  const inventories =
-    await this.prisma.roomInventory.findMany({
+    // =========================
+    // INVENTORY BLOCKS
+    // =========================
+    const inventories = await this.prisma.roomInventory.findMany({
       where: {
         roomTypeId: data.roomTypeId,
         date: {
@@ -227,368 +230,419 @@ async createReservation(
       },
     });
 
-  // =========================
-  // DAY BY DAY AVAILABILITY CHECK
-  // =========================
-  const currentDay = new Date(start);
+    // =========================
+    // DAY BY DAY AVAILABILITY CHECK
+    // =========================
+    const currentDay = new Date(start);
 
-  while (currentDay < end) {
-    const dayStart = new Date(currentDay);
+    while (currentDay < end) {
+      const dayStart = new Date(currentDay);
 
-    const bookedForDay = reservations.reduce(
-      (sum, reservation) => {
+      const bookedForDay = reservations.reduce((sum, reservation) => {
         const reservationCoversDay =
-          reservation.checkIn <= dayStart &&
-          reservation.checkOut > dayStart;
+          reservation.checkIn <= dayStart && reservation.checkOut > dayStart;
 
         if (!reservationCoversDay) {
           return sum;
         }
 
         return sum + reservation.roomCount;
-      },
-      0,
-    );
+      }, 0);
 
-    const inventory = inventories.find(
-      (inv) =>
-        inv.date.toISOString().slice(0, 10) ===
-        dayStart.toISOString().slice(0, 10),
-    );
+      const inventory = inventories.find(
+        (inv) =>
+          inv.date.toISOString().slice(0, 10) ===
+          dayStart.toISOString().slice(0, 10),
+      );
 
-    const blockedForDay =
-      inventory?.blockedCount ?? 0;
+      const blockedForDay = inventory?.blockedCount ?? 0;
 
-    const availableForDay =
-      roomType.totalCount -
-      bookedForDay -
-      blockedForDay;
+      const availableForDay =
+        roomType.totalCount - bookedForDay - blockedForDay;
 
-    if (availableForDay < data.roomCount) {
+      if (availableForDay < data.roomCount) {
+        throw new BadRequestException(
+          `Only ${availableForDay} room(s) available on ${
+            dayStart.toISOString().split('T')[0]
+          }`,
+        );
+      }
+
+      currentDay.setDate(currentDay.getDate() + 1);
+    }
+
+    // =========================
+    // GUEST VALIDATION
+    // =========================
+    const countedGuests = data.adults + data.children;
+
+    if (countedGuests > roomType.maxCapacity) {
       throw new BadRequestException(
-        `Only ${availableForDay} room(s) available on ${
-          dayStart.toISOString().split('T')[0]
-        }`,
+        `Maximum allowed guests is ${roomType.maxCapacity}`,
       );
     }
 
-    currentDay.setDate(
-      currentDay.getDate() + 1,
+    // =========================
+    // EXTRA GUESTS
+    // =========================
+    const extraGuests = Math.max(countedGuests - roomType.normalCapacity, 0);
+
+    const extraChildren = Math.min(data.children, extraGuests);
+
+    const extraAdults = extraGuests - extraChildren;
+
+    const childExtraPrice = extraChildren * 26.3;
+
+    const adultExtraPrice = extraAdults * 41.3;
+
+    const extraFee = childExtraPrice + adultExtraPrice;
+
+    // =========================
+    // PRICE
+    // =========================
+    const basePrice = Number(roomType.price);
+
+    const nights = Math.ceil(
+      (end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24),
     );
-  }
 
+    const subtotal = (basePrice + extraFee) * nights * data.roomCount;
+
+    const discountPercent = roomType.discountPercent || 0;
+
+    const discountAmount = (subtotal * discountPercent) / 100;
+
+    const totalPrice = subtotal - discountAmount;
+
+    // =========================
+    // CREATE
+    // =========================
+    // return this.prisma.reservation.create({
+    //   data: {
+    //     userId: data.userId,
+    //     roomTypeId: data.roomTypeId,
+
+    //     checkIn: start,
+    //     checkOut: end,
+
+    //     roomCount: data.roomCount,
+
+    //     adults: data.adults,
+    //     children: data.children,
+    //     babies: data.babies,
+
+    //     basePrice,
+    //     extraFee,
+    //     discount: discountPercent,
+    //     totalPrice,
+    //   },
+    // });
+
+   const result = await this.prisma.$transaction(async (tx) => {
   // =========================
-  // GUEST VALIDATION
+  // 1. CREATE RESERVATION
   // =========================
-  const countedGuests =
-    data.adults + data.children;
-
-  if (countedGuests > roomType.maxCapacity) {
-    throw new BadRequestException(
-      `Maximum allowed guests is ${roomType.maxCapacity}`,
-    );
-  }
-
-  // =========================
-  // EXTRA GUESTS
-  // =========================
-  const extraGuests = Math.max(
-    countedGuests -
-      roomType.normalCapacity,
-    0,
-  );
-
-  const extraChildren = Math.min(
-    data.children,
-    extraGuests,
-  );
-
-  const extraAdults =
-    extraGuests - extraChildren;
-
-  const childExtraPrice =
-    extraChildren * 26.3;
-
-  const adultExtraPrice =
-    extraAdults * 41.3;
-
-  const extraFee =
-    childExtraPrice + adultExtraPrice;
-
-  // =========================
-  // PRICE
-  // =========================
-  const basePrice = Number(
-    roomType.price,
-  );
-
-  const nights = Math.ceil(
-    (end.getTime() - start.getTime()) /
-      (1000 * 60 * 60 * 24),
-  );
-
-  const subtotal =
-    (basePrice + extraFee) *
-    nights *
-    data.roomCount;
-
-  const discountPercent =
-    roomType.discountPercent || 0;
-
-  const discountAmount =
-    (subtotal * discountPercent) / 100;
-
-  const totalPrice =
-    subtotal - discountAmount;
-
-  // =========================
-  // CREATE
-  // =========================
-  return this.prisma.reservation.create({
+  const createdReservation = await tx.reservation.create({
     data: {
       userId: data.userId,
       roomTypeId: data.roomTypeId,
-
       checkIn: start,
       checkOut: end,
-
       roomCount: data.roomCount,
-
       adults: data.adults,
       children: data.children,
       babies: data.babies,
-
       basePrice,
       extraFee,
       discount: discountPercent,
       totalPrice,
     },
   });
-}
-// async updateReservation({ 
-//   id,
-//   userId,
-//   dto,
-// }: {
-//   id: string;
-//   userId: string;
-//   dto: UpdateReservationDto;
-// }) {
-//   // =========================
-//   // FIND RESERVATION
-//   // =========================
-//   const reservation = await this.prisma.reservation.findFirst({
-//     where: {
-//       id,
-//       userId,
-//     },
-//     include: {
-//       roomType: {
-//         include: {
-//           reservations: true,
-//         },
-//       },
-//     },
-//   });
 
-//   if (!reservation) {
-//     throw new NotFoundException("Reservation not found");
-//   }
+  // =========================
+  // 2. GET USER
+  // =========================
+  const user = await tx.user.findUnique({
+    where: {
+      id: data.userId,
+    },
+  });
 
-//   // =========================
-//   // CHECK IF ALREADY STARTED
-//   // =========================
-//   const now = new Date();
-//   const currentCheckIn = new Date(reservation.checkIn);
+  // =========================
+  // 3. CREATE NOTIFICATION
+  // =========================
+  const notification = await tx.notification.create({
+    data: {
+      title: 'New Reservation',
+      message: `${user?.name ?? 'User'} booked room from ${
+        start.toISOString().split('T')[0]
+      } to ${
+        end.toISOString().split('T')[0]
+      }`,
+      type: NotificationType.RESERVATION,
+    },
+  });
 
-//   if (now >= currentCheckIn) {
-//     throw new BadRequestException(
-//       "You cannot update reservation after check-in date"
-//     );
-//   }
+  // =========================
+  // 4. FIND ADMINS
+  // =========================
+  const admins = await tx.user.findMany({
+    where: {
+      role: 'ADMIN',
+    },
+    select: {
+      id: true,
+    },
+  });
 
-//   // =========================
-//   // MERGE DATA
-//   // =========================
-//   const checkIn = dto.checkIn
-//     ? new Date(dto.checkIn)
-//     : reservation.checkIn;
+  // =========================
+  // 5. CREATE READ RECORDS
+  // =========================
+  await tx.notificationRead.createMany({
+    data: admins.map((admin) => ({
+      userId: admin.id,
+      notificationId: notification.id,
+      isRead: false,
+    })),
+  });
 
-//   const checkOut = dto.checkOut
-//     ? new Date(dto.checkOut)
-//     : reservation.checkOut;
+  return {
+    createdReservation,
+    notification,
+    adminIds: admins.map((a) => a.id),
+  };
+});
 
-//   const adults = dto.adults ?? reservation.adults;
-//   const children = dto.children ?? reservation.children;
-//   const babies = dto.babies ?? reservation.babies;
-//   const roomCount = dto.roomCount ?? reservation.roomCount;
+// =========================
+// 6. REALTIME AFTER COMMIT
+// =========================
 
-//   // =========================
-//   // DATE VALIDATION
-//   // =========================
-//   if (checkIn >= checkOut) {
-//     throw new BadRequestException("Invalid date range");
-//   }
+this.notificationsGateway.sendToUsers(
+  result.adminIds,
+  result.notification,
+);
 
-//   // =========================
-//   // OVERLAP CHECK (EXCLUDE CURRENT RESERVATION)
-//   // =========================
-//   const overlapping = reservation.roomType.reservations.filter(
-//     (r) =>
-//       r.id !== id &&
-//       r.status !== "CANCELLED" &&
-//       r.checkIn < checkOut &&
-//       r.checkOut > checkIn
-//   );
+// =========================
+// 7. RETURN RESERVATION
+// =========================
 
-//   const bookedRooms = overlapping.reduce(
-//     (sum, r) => sum + r.roomCount,
-//     0
-//   );
+return result.createdReservation;
+  }
+  // async updateReservation({
+  //   id,
+  //   userId,
+  //   dto,
+  // }: {
+  //   id: string;
+  //   userId: string;
+  //   dto: UpdateReservationDto;
+  // }) {
+  //   // =========================
+  //   // FIND RESERVATION
+  //   // =========================
+  //   const reservation = await this.prisma.reservation.findFirst({
+  //     where: {
+  //       id,
+  //       userId,
+  //     },
+  //     include: {
+  //       roomType: {
+  //         include: {
+  //           reservations: true,
+  //         },
+  //       },
+  //     },
+  //   });
 
-//   const available = reservation.roomType.totalCount - bookedRooms;
+  //   if (!reservation) {
+  //     throw new NotFoundException("Reservation not found");
+  //   }
 
-//   if (available < roomCount) {
-//     throw new BadRequestException(
-//       `Only ${available} rooms available`
-//     );
-//   }
+  //   // =========================
+  //   // CHECK IF ALREADY STARTED
+  //   // =========================
+  //   const now = new Date();
+  //   const currentCheckIn = new Date(reservation.checkIn);
 
-//   // =========================
-//   // GUEST VALIDATION
-//   // =========================
-//   const totalGuests = adults + children;
+  //   if (now >= currentCheckIn) {
+  //     throw new BadRequestException(
+  //       "You cannot update reservation after check-in date"
+  //     );
+  //   }
 
-//   if (totalGuests > reservation.roomType.maxCapacity) {
-//     throw new BadRequestException("Max capacity exceeded");
-//   }
+  //   // =========================
+  //   // MERGE DATA
+  //   // =========================
+  //   const checkIn = dto.checkIn
+  //     ? new Date(dto.checkIn)
+  //     : reservation.checkIn;
 
-//   // =========================
-//   // EXTRA FEE LOGIC
-//   // =========================
-//   const extraGuests = Math.max(
-//     totalGuests - reservation.roomType.normalCapacity,
-//     0
-//   );
+  //   const checkOut = dto.checkOut
+  //     ? new Date(dto.checkOut)
+  //     : reservation.checkOut;
 
-//   const extraChildren = Math.min(extraGuests, children);
-//   const extraAdults = extraGuests - extraChildren;
+  //   const adults = dto.adults ?? reservation.adults;
+  //   const children = dto.children ?? reservation.children;
+  //   const babies = dto.babies ?? reservation.babies;
+  //   const roomCount = dto.roomCount ?? reservation.roomCount;
 
-//   const extraFee =
-//     extraChildren * 26.3 + extraAdults * 41.3;
+  //   // =========================
+  //   // DATE VALIDATION
+  //   // =========================
+  //   if (checkIn >= checkOut) {
+  //     throw new BadRequestException("Invalid date range");
+  //   }
 
-//   // =========================
-//   // PRICING
-//   // =========================
-//   const basePrice = Number(reservation.roomType.price);
+  //   // =========================
+  //   // OVERLAP CHECK (EXCLUDE CURRENT RESERVATION)
+  //   // =========================
+  //   const overlapping = reservation.roomType.reservations.filter(
+  //     (r) =>
+  //       r.id !== id &&
+  //       r.status !== "CANCELLED" &&
+  //       r.checkIn < checkOut &&
+  //       r.checkOut > checkIn
+  //   );
 
-//   const nights = Math.ceil(
-//     (checkOut.getTime() - checkIn.getTime()) /
-//       (1000 * 60 * 60 * 24)
-//   );
+  //   const bookedRooms = overlapping.reduce(
+  //     (sum, r) => sum + r.roomCount,
+  //     0
+  //   );
 
-//   const subtotal =
-//     (basePrice + extraFee) * nights * roomCount;
+  //   const available = reservation.roomType.totalCount - bookedRooms;
 
-//   const discountPercent =
-//     reservation.roomType.discountPercent || 0;
+  //   if (available < roomCount) {
+  //     throw new BadRequestException(
+  //       `Only ${available} rooms available`
+  //     );
+  //   }
 
-//   const discountAmount =
-//     (subtotal * discountPercent) / 100;
+  //   // =========================
+  //   // GUEST VALIDATION
+  //   // =========================
+  //   const totalGuests = adults + children;
 
-//   const totalPrice = subtotal - discountAmount;
+  //   if (totalGuests > reservation.roomType.maxCapacity) {
+  //     throw new BadRequestException("Max capacity exceeded");
+  //   }
 
-//   // =========================
-//   // UPDATE
-//   // =========================
-//   return this.prisma.reservation.update({
-//     where: { id },
-//     data: {
-//       checkIn,
-//       checkOut,
-//       adults,
-//       children,
-//       babies,
-//       roomCount,
+  //   // =========================
+  //   // EXTRA FEE LOGIC
+  //   // =========================
+  //   const extraGuests = Math.max(
+  //     totalGuests - reservation.roomType.normalCapacity,
+  //     0
+  //   );
 
-//       basePrice,
-//       extraFee,
-//       discount: discountPercent,
-//       totalPrice,
-//     },
-//   });
-// }
-async updateReservation({
-  id,
-  userId,
-  dto,
-}: {
-  id: string;
-  userId: string;
-  dto: UpdateReservationDto;
-}) {
-  return this.prisma.$transaction(async (tx) => {
-    // =========================
-    // FIND RESERVATION (LOCKED READ STYLE)
-    // =========================
-    const reservation = await tx.reservation.findFirst({
-      where: {
-        id,
-        userId,
-      },
-      include: {
-        roomType: {
-          include: {
-            reservations: true,
+  //   const extraChildren = Math.min(extraGuests, children);
+  //   const extraAdults = extraGuests - extraChildren;
+
+  //   const extraFee =
+  //     extraChildren * 26.3 + extraAdults * 41.3;
+
+  //   // =========================
+  //   // PRICING
+  //   // =========================
+  //   const basePrice = Number(reservation.roomType.price);
+
+  //   const nights = Math.ceil(
+  //     (checkOut.getTime() - checkIn.getTime()) /
+  //       (1000 * 60 * 60 * 24)
+  //   );
+
+  //   const subtotal =
+  //     (basePrice + extraFee) * nights * roomCount;
+
+  //   const discountPercent =
+  //     reservation.roomType.discountPercent || 0;
+
+  //   const discountAmount =
+  //     (subtotal * discountPercent) / 100;
+
+  //   const totalPrice = subtotal - discountAmount;
+
+  //   // =========================
+  //   // UPDATE
+  //   // =========================
+  //   return this.prisma.reservation.update({
+  //     where: { id },
+  //     data: {
+  //       checkIn,
+  //       checkOut,
+  //       adults,
+  //       children,
+  //       babies,
+  //       roomCount,
+
+  //       basePrice,
+  //       extraFee,
+  //       discount: discountPercent,
+  //       totalPrice,
+  //     },
+  //   });
+  // }
+  async updateReservation({
+    id,
+    userId,
+    dto,
+  }: {
+    id: string;
+    userId: string;
+    dto: UpdateReservationDto;
+  }) {
+    return this.prisma.$transaction(async (tx) => {
+      // =========================
+      // FIND RESERVATION (LOCKED READ STYLE)
+      // =========================
+      const reservation = await tx.reservation.findFirst({
+        where: {
+          id,
+          userId,
+        },
+        include: {
+          roomType: {
+            include: {
+              reservations: true,
+            },
           },
         },
-      },
-    });
+      });
 
-    if (!reservation) {
-      throw new NotFoundException("Reservation not found");
-    }
+      if (!reservation) {
+        throw new NotFoundException('Reservation not found');
+      }
 
-    const now = new Date();
+      const now = new Date();
 
-    if (now >= reservation.checkIn) {
-      throw new BadRequestException(
-        "You cannot update after check-in"
-      );
-    }
+      if (now >= reservation.checkIn) {
+        throw new BadRequestException('You cannot update after check-in');
+      }
 
-    // =========================
-    // MERGE INPUT
-    // =========================
-    const checkIn = dto.checkIn
-      ? new Date(dto.checkIn)
-      : reservation.checkIn;
+      // =========================
+      // MERGE INPUT
+      // =========================
+      const checkIn = dto.checkIn ? new Date(dto.checkIn) : reservation.checkIn;
 
-    const checkOut = dto.checkOut
-      ? new Date(dto.checkOut)
-      : reservation.checkOut;
+      const checkOut = dto.checkOut
+        ? new Date(dto.checkOut)
+        : reservation.checkOut;
 
-    const roomCount =
-      dto.roomCount ?? reservation.roomCount;
+      const roomCount = dto.roomCount ?? reservation.roomCount;
 
-    const adults =
-      dto.adults ?? reservation.adults;
+      const adults = dto.adults ?? reservation.adults;
 
-    const children =
-      dto.children ?? reservation.children;
+      const children = dto.children ?? reservation.children;
 
-    const babies =
-      dto.babies ?? reservation.babies;
+      const babies = dto.babies ?? reservation.babies;
 
-    if (checkIn >= checkOut) {
-      throw new BadRequestException("Invalid dates");
-    }
+      if (checkIn >= checkOut) {
+        throw new BadRequestException('Invalid dates');
+      }
 
-    // =========================
-    // INVENTORY FETCH (LOCKING RANGE)
-    // =========================
-    const inventories =
-      await tx.roomInventory.findMany({
+      // =========================
+      // INVENTORY FETCH (LOCKING RANGE)
+      // =========================
+      const inventories = await tx.roomInventory.findMany({
         where: {
           roomTypeId: reservation.roomTypeId,
           date: {
@@ -598,184 +652,147 @@ async updateReservation({
         },
       });
 
-    // =========================
-    // OVERLAPS (EXCLUDE CURRENT)
-    // =========================
-    const overlapping = reservation.roomType.reservations.filter(
-      (r) =>
-        r.id !== id &&
-        r.status !== "CANCELLED" &&
-        r.checkIn < checkOut &&
-        r.checkOut > checkIn,
-    );
-
-    // =========================
-    // BUILD DAYS
-    // =========================
-    const days: Date[] = [];
-
-    const current = new Date(checkIn);
-
-    while (current < checkOut) {
-      days.push(new Date(current));
-      current.setDate(current.getDate() + 1);
-    }
-
-    // =========================
-    // SAFE AVAILABILITY CHECK
-    // =========================
-    for (const day of days) {
-      const booked = overlapping.reduce((sum, r) => {
-        if (day >= r.checkIn && day < r.checkOut) {
-          return sum + r.roomCount;
-        }
-        return sum;
-      }, 0);
-
-      const blocked = inventories
-        .filter(
-          (i) =>
-            i.date.toISOString().slice(0, 10) ===
-            day.toISOString().slice(0, 10),
-        )
-        .reduce(
-          (sum, i) => sum + i.blockedCount,
-          0,
-        );
-
-      const available =
-        reservation.roomType.totalCount -
-        booked -
-        blocked;
-
-      if (available < roomCount) {
-        throw new BadRequestException(
-          `Only ${available} rooms available on ${
-            day.toISOString().slice(0, 10)
-          }`,
-        );
-      }
-    }
-
-    // =========================
-    // GUEST VALIDATION
-    // =========================
-    const totalGuests = adults + children;
-
-    if (
-      totalGuests >
-      reservation.roomType.maxCapacity
-    ) {
-      throw new BadRequestException(
-        "Max capacity exceeded"
+      // =========================
+      // OVERLAPS (EXCLUDE CURRENT)
+      // =========================
+      const overlapping = reservation.roomType.reservations.filter(
+        (r) =>
+          r.id !== id &&
+          r.status !== 'CANCELLED' &&
+          r.checkIn < checkOut &&
+          r.checkOut > checkIn,
       );
-    }
 
-    // =========================
-    // EXTRA LOGIC
-    // =========================
-    const extraGuests = Math.max(
-      totalGuests -
-        reservation.roomType.normalCapacity,
-      0,
-    );
+      // =========================
+      // BUILD DAYS
+      // =========================
+      const days: Date[] = [];
 
-    const extraChildren = Math.min(
-      children,
-      extraGuests,
-    );
+      const current = new Date(checkIn);
 
-    const extraAdults =
-      extraGuests - extraChildren;
+      while (current < checkOut) {
+        days.push(new Date(current));
+        current.setDate(current.getDate() + 1);
+      }
 
-    const extraFee =
-      extraChildren * 26.3 +
-      extraAdults * 41.3;
+      // =========================
+      // SAFE AVAILABILITY CHECK
+      // =========================
+      for (const day of days) {
+        const booked = overlapping.reduce((sum, r) => {
+          if (day >= r.checkIn && day < r.checkOut) {
+            return sum + r.roomCount;
+          }
+          return sum;
+        }, 0);
 
-    // =========================
-    // PRICE
-    // =========================
-    const basePrice = Number(
-      reservation.roomType.price,
-    );
+        const blocked = inventories
+          .filter(
+            (i) =>
+              i.date.toISOString().slice(0, 10) ===
+              day.toISOString().slice(0, 10),
+          )
+          .reduce((sum, i) => sum + i.blockedCount, 0);
 
-    const nights = Math.ceil(
-      (checkOut.getTime() -
-        checkIn.getTime()) /
-        (1000 * 60 * 60 * 24),
-    );
+        const available = reservation.roomType.totalCount - booked - blocked;
 
-    const subtotal =
-      (basePrice + extraFee) *
-      nights *
-      roomCount;
+        if (available < roomCount) {
+          throw new BadRequestException(
+            `Only ${available} rooms available on ${day
+              .toISOString()
+              .slice(0, 10)}`,
+          );
+        }
+      }
 
-    const discountPercent =
-      reservation.roomType.discountPercent ||
-      0;
+      // =========================
+      // GUEST VALIDATION
+      // =========================
+      const totalGuests = adults + children;
 
-    const totalPrice =
-      subtotal -
-      (subtotal * discountPercent) / 100;
+      if (totalGuests > reservation.roomType.maxCapacity) {
+        throw new BadRequestException('Max capacity exceeded');
+      }
 
-    // =========================
-    // UPDATE (ATOMIC)
-    // =========================
-    return tx.reservation.update({
-      where: { id },
-      data: {
-        checkIn,
-        checkOut,
-        roomCount,
-        adults,
-        children,
-        babies,
-        basePrice,
-        extraFee,
-        discount: discountPercent,
-        totalPrice,
+      // =========================
+      // EXTRA LOGIC
+      // =========================
+      const extraGuests = Math.max(
+        totalGuests - reservation.roomType.normalCapacity,
+        0,
+      );
+
+      const extraChildren = Math.min(children, extraGuests);
+
+      const extraAdults = extraGuests - extraChildren;
+
+      const extraFee = extraChildren * 26.3 + extraAdults * 41.3;
+
+      // =========================
+      // PRICE
+      // =========================
+      const basePrice = Number(reservation.roomType.price);
+
+      const nights = Math.ceil(
+        (checkOut.getTime() - checkIn.getTime()) / (1000 * 60 * 60 * 24),
+      );
+
+      const subtotal = (basePrice + extraFee) * nights * roomCount;
+
+      const discountPercent = reservation.roomType.discountPercent || 0;
+
+      const totalPrice = subtotal - (subtotal * discountPercent) / 100;
+
+      // =========================
+      // UPDATE (ATOMIC)
+      // =========================
+      return tx.reservation.update({
+        where: { id },
+        data: {
+          checkIn,
+          checkOut,
+          roomCount,
+          adults,
+          children,
+          babies,
+          basePrice,
+          extraFee,
+          discount: discountPercent,
+          totalPrice,
+        },
+      });
+    });
+  }
+  async cancelReservation({ id, userId }: { id: string; userId: string }) {
+    const reservation = await this.prisma.reservation.findFirst({
+      where: {
+        id,
+        userId, // user yalnız öz rezervasiyasını cancel edə bilər
       },
     });
-  });
-}
-async cancelReservation({
-  id,
-  userId,
-}: {
-  id: string;
-  userId: string;
-}) {
-  const reservation = await this.prisma.reservation.findFirst({
-    where: {
-      id,
-      userId, // user yalnız öz rezervasiyasını cancel edə bilər
-    },
-  });
 
-  if (!reservation) {
-    throw new NotFoundException('Reservation not found');
+    if (!reservation) {
+      throw new NotFoundException('Reservation not found');
+    }
+
+    // artıq cancel olunubsa
+    if (reservation.status === 'CANCELLED') {
+      throw new BadRequestException('Already cancelled');
+    }
+
+    // check-in keçibsə cancel etmə
+    const now = new Date();
+    const checkIn = new Date(reservation.checkIn);
+
+    if (now >= checkIn) {
+      throw new BadRequestException('You cannot cancel after check-in date');
+    }
+
+    return this.prisma.reservation.update({
+      where: { id },
+      data: {
+        status: 'CANCELLED',
+      },
+    });
   }
-
-  // artıq cancel olunubsa
-  if (reservation.status === 'CANCELLED') {
-    throw new BadRequestException('Already cancelled');
-  }
-
-  // check-in keçibsə cancel etmə
-  const now = new Date();
-  const checkIn = new Date(reservation.checkIn);
-
-  if (now >= checkIn) {
-    throw new BadRequestException(
-      'You cannot cancel after check-in date',
-    );
-  }
-
-  return this.prisma.reservation.update({
-    where: { id },
-    data: {
-      status: 'CANCELLED',
-    },
-  });
-}
 }

@@ -9,6 +9,7 @@ import { UsersModule } from './modules/users/users.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { ConfigModule } from '@nestjs/config';
 import { CloudinaryModule } from './modules/cloudianry/cloudinary.module';
+import { NotificationsModule } from './modules/notifications/notifications.module';
 @Module({
   imports: [
     PrismaModule,
@@ -20,6 +21,7 @@ import { CloudinaryModule } from './modules/cloudianry/cloudinary.module';
       isGlobal: true, // hər yerdə istifadə olunsun
     }),
     CloudinaryModule,
+    NotificationsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

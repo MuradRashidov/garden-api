@@ -23,17 +23,17 @@ import { UpdateRoomTypeDto } from './dtos/UpdateRoomType.dto';
 @Controller('rooms')
 export class RoomsController {
   constructor(private readonly roomsService: RoomsService) {}
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('ADMIN', 'CUSTOMER')
-  @Get()
-  async getRooms(
-    @Req() req: any,
-    @Query('checkIn') checkIn?: string,
-    @Query('checkOut') checkOut?: string,
-  ) {
-    console.log('Received query parameters:', { checkIn, checkOut });
-    return this.roomsService.getRooms(checkIn, checkOut, req.user.role);
-  }
+    @UseGuards(JwtAuthGuard, RolesGuard)
+    @Roles('ADMIN', 'CUSTOMER')
+    @Get()
+    async getRooms(
+      @Req() req: any,
+      @Query('checkIn') checkIn?: string,
+      @Query('checkOut') checkOut?: string,
+    ) {
+      console.log('Received query parameters:', { checkIn, checkOut });
+      return this.roomsService.getRooms(checkIn, checkOut, req.user.role);
+    }
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('ADMIN')
   @Post('create')

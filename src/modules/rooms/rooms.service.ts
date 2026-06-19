@@ -23,13 +23,21 @@ export class RoomsService {
     // const start = new Date(checkIn);
     // const end = new Date(checkOut);
     console.log(`User role is ${userRole}`);
-    if ((!checkIn || !checkOut) && userRole === 'CUSTOMER') {
-      console.log('Customer requested rooms without date filters, returning empty list');
-  return [];
+    if ((!checkIn || !checkOut)) {
+      console.log(checkIn, checkOut);
+      if(userRole === "ADMIN"){
+        return rooms;
+      }
+      if(userRole === "CUSTOMER"){
+        console.log('Customer requested rooms without date filters, returning empty list');
+        return [];
+      }
+  //     console.log('Customer requested rooms without date filters, returning empty list');
+  // return [];
 }
-if((!checkIn || !checkOut) && userRole==="ADMIN"){
-  return rooms;
-}
+// if((!checkIn || !checkOut) && userRole==="ADMIN"){
+//   return rooms;
+// }
 const start = new Date(checkIn);
 const end = new Date(checkOut);
 
