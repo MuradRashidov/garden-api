@@ -7,15 +7,20 @@ import {
 import { PrismaService } from 'src/prisma/prisma/prisma.service';
 import { CreateReservationDto } from './dtos/create-reservation.dto';
 import { UpdateReservationDto } from './dtos/update-reservation.dto';
-import { NotificationType } from '@prisma/client';
+import { NotificationType, UserRole } from '@prisma/client';
 import { NotificationsGateway } from '../notifications/notifications.gateway';
-
+import { Expo } from "expo-server-sdk";
 @Injectable()
 export class ReservationsService {
+    private expo: Expo;
+
   constructor(
     private prisma: PrismaService,
     private notificationsGateway: NotificationsGateway,
-  ) {}
+  ) {
+    this.expo = new Expo();
+  }
+  
   async getAllReservations() {
     return this.prisma.reservation.findMany({
       include: {
@@ -339,9 +344,6 @@ export class ReservationsService {
     // });
 
    const result = await this.prisma.$transaction(async (tx) => {
-  // =========================
-  // 1. CREATE RESERVATION
-  // =========================
   const createdReservation = await tx.reservation.create({
     data: {
       userId: data.userId,
@@ -359,45 +361,34 @@ export class ReservationsService {
     },
   });
 
-  // =========================
-  // 2. GET USER
-  // =========================
   const user = await tx.user.findUnique({
     where: {
       id: data.userId,
     },
   });
 
-  // =========================
-  // 3. CREATE NOTIFICATION
-  // =========================
   const notification = await tx.notification.create({
     data: {
-      title: 'New Reservation',
-      message: `${user?.name ?? 'User'} booked room from ${
-        start.toISOString().split('T')[0]
+      title: "New Reservation",
+      message: `${user?.name ?? "User"} booked room from ${
+        start.toISOString().split("T")[0]
       } to ${
-        end.toISOString().split('T')[0]
+        end.toISOString().split("T")[0]
       }`,
       type: NotificationType.RESERVATION,
     },
   });
 
-  // =========================
-  // 4. FIND ADMINS
-  // =========================
   const admins = await tx.user.findMany({
     where: {
-      role: 'ADMIN',
+      role: UserRole.ADMIN,
     },
     select: {
       id: true,
+      expoPushToken: true,
     },
   });
-
-  // =========================
-  // 5. CREATE READ RECORDS
-  // =========================
+console.log(admins)
   await tx.notificationRead.createMany({
     data: admins.map((admin) => ({
       userId: admin.id,
@@ -409,22 +400,44 @@ export class ReservationsService {
   return {
     createdReservation,
     notification,
-    adminIds: admins.map((a) => a.id),
+    admins,
   };
 });
 
-// =========================
-// 6. REALTIME AFTER COMMIT
-// =========================
-
+// SOCKET
 this.notificationsGateway.sendToUsers(
-  result.adminIds,
+  result.admins.map((a) => a.id),
   result.notification,
 );
 
-// =========================
-// 7. RETURN RESERVATION
-// =========================
+// PUSH NOTIFICATION
+const messages = result.admins
+  .filter(
+    (admin) =>
+      admin.expoPushToken &&
+      Expo.isExpoPushToken(admin.expoPushToken)
+  )
+  .map((admin) => ({
+    to: admin.expoPushToken!,
+    sound: "default",
+    title: result.notification.title,
+    body: result.notification.message,
+    data: {
+      notificationId: result.notification.id,
+      type: result.notification.type,
+    },
+  }));
+
+if (messages.length > 0) {
+ try {
+  const result = await this.expo.sendPushNotificationsAsync(
+    messages
+  );
+  console.log(result)
+ } catch (error:any) {
+  console.log(error)
+ }
+}
 
 return result.createdReservation;
   }

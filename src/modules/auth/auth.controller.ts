@@ -63,12 +63,8 @@ export class AuthController {
     return { message: 'Successfully logged out' };
   }
 @Post("google")
-async googleLogin(
-  @Body() dto: GoogleLoginDto,
-) {
-  return this.authService.googleLogin(
-    dto.accessToken,
-  );
+async googleLogin(@Body() dto: GoogleLoginDto) {
+  return this.authService.googleLogin(dto.idToken);
 }
 
 }

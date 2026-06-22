@@ -11,7 +11,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     private prisma: PrismaService,
     private configService: ConfigService,
   ) {
-    console.log(23424324324);
+    //console.log(23424324324);
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
@@ -21,7 +21,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
 
   // Validate JWT payload
   async validate(payload: { sub: string; email: string }) {
-    console.log(23424324324);
+    //console.log(23424324324);
     
     console.log(`Validating JWT for user: ${payload}`);
     const user = await this.prisma.user.findUnique({

@@ -26,5 +26,15 @@ export class UsersService {
       },
     });
   }
-  
+  async savePushToken(
+  userId: string,
+  pushToken: string,
+) {
+  return this.prisma.user.update({
+    where: { id: userId },
+    data: {
+      expoPushToken: pushToken,
+    },
+  });
+}
 }

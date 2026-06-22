@@ -14,7 +14,9 @@ import { User } from '@prisma/client';
 import { randomBytes } from 'crypto';
 import { AuthResponse } from './dtos/auth-response';
 import { LoginDto } from './dtos/login.dto';
-import axios from 'axios';
+import { OAuth2Client } from "google-auth-library";
+
+const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
 @Injectable()
 export class AuthService {
@@ -106,7 +108,7 @@ export class AuthService {
     });
   }
    async generateTokens(
-    user: Omit<User, 'password' | 'refreshToken' | 'createdAt' | 'updatedAt'| 'googleId'| 'profileImageUrl'|'provider'>,
+    user: Omit<User, 'password' | 'refreshToken' | 'createdAt' | 'updatedAt'| 'googleId'| 'profileImageUrl'|'provider' | 'expoPushToken'>,
   ): Promise<{ accessToken: string; refreshToken: string }> {
     // Implement JWT token generation logic here
     const payload = { sub: user.id, email: user.email, role: user.role };
@@ -192,56 +194,136 @@ async login(loginDto: LoginDto): Promise<AuthResponse> {
       data: { refreshToken: null },
     });
   }
-async googleLogin(
-  googleAccessToken: string,
-): Promise<AuthResponse> {
-  const response = await axios.get(
-    "https://www.googleapis.com/oauth2/v3/userinfo",
-    {
-      headers: {
-        Authorization: `Bearer ${googleAccessToken}`,
-      },
-    },
-  );
+// async googleLogin(
+//   googleAccessToken: string,
+// ): Promise<AuthResponse> {
+//   const response = await axios.get(
+//     "https://www.googleapis.com/oauth2/v3/userinfo",
+//     {
+//       headers: {
+//         Authorization: `Bearer ${googleAccessToken}`,
+//       },
+//     },
+//   );
 
-  const googleUser = response.data;
+//   const googleUser = response.data;
 
-  let user =
-    await this.prisma.user.findUnique({
-      where: {
-        email: googleUser.email,
-      },
+//   let user =
+//     await this.prisma.user.findUnique({
+//       where: {
+//         email: googleUser.email,
+//       },
+//     });
+
+//   if (!user) {
+//     user = await this.prisma.user.create({
+//       data: {
+//         email: googleUser.email,
+//         name: googleUser.name,
+//         googleId: googleUser.id,
+//         provider: "GOOGLE",
+//         profileImageUrl: googleUser.picture,
+//       },
+//     });
+//   }
+
+//   const tokens =
+//     await this.generateTokens(user);
+
+//   await this.updateRefreshToken(
+//     user.id,
+//     tokens.refreshToken,
+//   );
+
+//   return {
+//     ...tokens,
+//     user: {
+//       id: user.id,
+//       email: user.email,
+//       profileImageUrl: user.profileImageUrl,
+//       name: user.name,
+//       role: user.role,
+//     },
+//   };
+// }
+
+
+
+async googleLogin(idToken: string): Promise<AuthResponse> {
+
+  try {
+    // 1. VERIFY GOOGLE ID TOKEN
+    console.log("ID Token",idToken)
+    const ticket = await client.verifyIdToken({
+      idToken,
+      audience: process.env.GOOGLE_CLIENT_ID,
     });
 
-  if (!user) {
-    user = await this.prisma.user.create({
-      data: {
-        email: googleUser.email,
-        name: googleUser.name,
-        googleId: googleUser.id,
-        provider: "GOOGLE",
-        profileImageUrl: googleUser.picture,
-      },
+    const payload = ticket.getPayload();
+
+    if (!payload) {
+      throw new UnauthorizedException("Invalid Google token");
+    }
+
+    // 2. GOOGLE USER DATA
+    const googleUser = {
+      email: payload.email,
+      name: payload.name,
+      googleId: payload.sub,
+      picture: payload.picture,
+    };
+
+    if (!googleUser.email) {
+      throw new UnauthorizedException("Google email not found");
+    }
+
+    // 3. FIND USER
+    let user = await this.prisma.user.findUnique({
+      where: { email: googleUser.email },
     });
+
+    // 4. CREATE USER IF NOT EXISTS
+    if (!user) {
+      user = await this.prisma.user.create({
+        data: {
+          email: googleUser.email,
+          name: googleUser.name,
+          googleId: googleUser.googleId,
+          provider: "GOOGLE",
+          profileImageUrl: googleUser.picture,
+        },
+      });
+    } else {
+      // optional: update google info
+      user = await this.prisma.user.update({
+        where: { id: user.id },
+        data: {
+          googleId: googleUser.googleId,
+          profileImageUrl: googleUser.picture,
+        },
+      });
+    }
+
+    // 5. GENERATE TOKENS
+    const tokens = await this.generateTokens(user);
+
+    // 6. SAVE REFRESH TOKEN
+    await this.updateRefreshToken(user.id, tokens.refreshToken);
+
+    // 7. RETURN RESPONSE
+    return {
+      ...tokens,
+      user: {
+        id: user.id,
+        email: user.email,
+        profileImageUrl: user.profileImageUrl,
+        name: user.name,
+        role: user.role,
+      },
+    };
+  } catch (error) {
+    console.error("Google login error:", error);
+    throw new UnauthorizedException("Google authentication failed");
   }
-
-  const tokens =
-    await this.generateTokens(user);
-
-  await this.updateRefreshToken(
-    user.id,
-    tokens.refreshToken,
-  );
-
-  return {
-    ...tokens,
-    user: {
-      id: user.id,
-      email: user.email,
-      profileImageUrl: user.profileImageUrl,
-      name: user.name,
-      role: user.role,
-    },
-  };
 }
 }
