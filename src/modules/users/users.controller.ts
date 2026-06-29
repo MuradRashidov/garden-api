@@ -14,17 +14,17 @@ export class UsersController {
   // =========================
   @UseGuards(JwtAuthGuard)
   @Get('me')
-  getMe(@Req() req: RequestWithUser) {
+  async getMe(@Req() req: RequestWithUser) {
     console.log('Current user ID:', req.user.id);
-    return this.usersService.findById(req.user.id);
+    return await this.usersService.findById(req.user.id);
   }
   @Post('push-token')
   @UseGuards(JwtAuthGuard)
-  savePushToken(
+  async savePushToken(
     @Req() req: RequestWithUser,
     @Body() body: { pushToken: string },
   ) {
-    console.log("Push Token is",body.pushToken)
-    return this.usersService.savePushToken(req.user.id, body.pushToken);
+    console.log('Push Token is', body.pushToken);
+    return await this.usersService.savePushToken(req.user.id, body.pushToken);
   }
 }

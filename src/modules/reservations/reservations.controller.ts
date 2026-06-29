@@ -13,24 +13,26 @@ import { ReservationsService } from './reservations.service';
 import { RequestWithUser } from 'src/common/interfaces/request-with-user.interface';
 import { JwtAuthGuard } from 'src/common/guards/jwt-auth.guard';
 import { UpdateReservationDto } from './dtos/update-reservation.dto';
+import { Reservation } from './dtos/reservation-list-reponse.dto';
+import { AuthResponse } from '../auth/dtos/auth-response';
 
 @Controller('reservations')
 export class ReservationsController {
   constructor(private reservationsService: ReservationsService) {}
   @Get('all')
-  getAll() {
-    return this.reservationsService.getAllReservations();
+  async getAll(): Promise<Reservation[]> {
+    return await this.reservationsService.getAllReservations();
   }
   @UseGuards(JwtAuthGuard)
   @Get('my')
-  getMyReservations(@Req() req: RequestWithUser) {
+  async getMyReservations(@Req() req: RequestWithUser) {
     console.log('Fetching reservations for user ID:', req.user.id);
-    return this.reservationsService.getMyReservations(req.user.id);
+    return await this.reservationsService.getMyReservations(req.user.id);
   }
   @UseGuards(JwtAuthGuard)
   @Post()
-  create(@Body() dto: CreateReservationDto, @Req() req: RequestWithUser) {
-    return this.reservationsService.createReservation({
+  async create(@Body() dto: CreateReservationDto, @Req() req: RequestWithUser) {
+    return await this.reservationsService.createReservation({
       ...dto,
       userId: req.user.id,
     });
@@ -38,12 +40,12 @@ export class ReservationsController {
 
   @UseGuards(JwtAuthGuard)
   @Patch(':id')
-  updateReservation(
+  async updateReservation(
     @Param('id') id: string,
     @Body() dto: UpdateReservationDto,
     @Req() req: RequestWithUser,
   ) {
-    return this.reservationsService.updateReservation({
+    return await this.reservationsService.updateReservation({
       id,
       userId: req.user.id,
       dto,
@@ -52,11 +54,13 @@ export class ReservationsController {
 
   @UseGuards(JwtAuthGuard)
   @Patch(':id/cancel')
-  cancelReservation(@Param('id') id: string, @Req() req: RequestWithUser) {
-    return this.reservationsService.cancelReservation({
+  async cancelReservation(
+    @Param('id') id: string,
+    @Req() req: RequestWithUser,
+  ) {
+    return await this.reservationsService.cancelReservation({
       id,
       userId: req.user.id,
     });
   }
-  
 }

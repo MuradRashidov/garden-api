@@ -10,6 +10,9 @@ import { AuthModule } from './modules/auth/auth.module';
 import { ConfigModule } from '@nestjs/config';
 import { CloudinaryModule } from './modules/cloudianry/cloudinary.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
+import { MailModule } from './modules/mail/mail.module';
+import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
+import { APP_GUARD } from '@nestjs/core';
 @Module({
   imports: [
     PrismaModule,
@@ -20,10 +23,20 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
     ConfigModule.forRoot({
       isGlobal: true, // hər yerdə istifadə olunsun
     }),
+    ThrottlerModule.forRoot([
+      {
+        ttl: 60_000, // 1 dəqiqə
+        limit: 100,  // 100 sorğu
+      }]),
     CloudinaryModule,
     NotificationsModule,
+    MailModule,
+
   ],
   controllers: [AppController],
-  providers: [AppService],
+  providers: [AppService,{
+      provide: APP_GUARD,
+      useClass: ThrottlerGuard,
+    },],
 })
 export class AppModule {}

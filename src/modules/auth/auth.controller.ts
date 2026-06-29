@@ -1,9 +1,4 @@
-import {
-  Body,
-  Controller,
-  Post,
-  UseGuards,
-} from '@nestjs/common';
+import { Body, Controller, Post, UseGuards } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { RegisterDto } from './dtos/register.dto';
 import { AuthResponse } from './dtos/auth-response';
@@ -12,25 +7,16 @@ import { GetUser } from 'src/common/decorators/get-user.decorator';
 import { JwtAuthGuard } from 'src/common/guards/jwt-auth.guard';
 import { GoogleLoginDto } from './dtos/google-login.dto';
 
-
-
-
 @Controller('auth')
 export class AuthController {
-  constructor(
-    private readonly authService: AuthService,
-  ) {}
+  constructor(private readonly authService: AuthService) {}
 
   // =========================
   // REGISTER USER
   // =========================
   @Post('register')
-  createUser(
-    @Body() body: RegisterDto,
-  ) {
-    return this.authService.createUser(
-      body,
-    );
+  createUser(@Body() body: RegisterDto) {
+    return this.authService.createUser(body);
   }
 
   @Post('login')
@@ -52,19 +38,23 @@ export class AuthController {
   //   description: 'Too Many Requests. Rate limit exceeded',
   // })
   // @HttpCode(HttpStatus.OK)
+  
   async login(@Body() loginDto: LoginDto): Promise<AuthResponse> {
     return await this.authService.login(loginDto);
   }
 
-  @Post("logout")
-   @UseGuards(JwtAuthGuard)
+  @Post('logout')
+  @UseGuards(JwtAuthGuard)
   async logout(@GetUser('id') id: string): Promise<{ message: string }> {
     await this.authService.logout(id);
     return { message: 'Successfully logged out' };
   }
-@Post("google")
-async googleLogin(@Body() dto: GoogleLoginDto) {
-  return this.authService.googleLogin(dto.idToken);
-}
-
+  @Post('google')
+  async googleLogin(@Body() dto: GoogleLoginDto) {
+    return await this.authService.googleLogin(dto.idToken);
+  }
+  @Post('refresh')
+  async refresh(@Body() body: { refreshToken: string }): Promise<AuthResponse> {
+    return  await this.authService.refresh(body.refreshToken);
+  }
 }

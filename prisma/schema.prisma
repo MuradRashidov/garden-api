@@ -1,179 +1,146 @@
 generator client {
-    provider = "prisma-client-js"
+  provider = "prisma-client-js"
 }
 
 datasource db {
-    provider = "postgresql"
-}
-
-enum ReservationStatus {
-    PENDING
-    CONFIRMED
-    CANCELLED
-}
-
-enum AuthProvider {
-    LOCAL
-    GOOGLE
-}
-
-enum UserRole {
-    ADMIN
-    CUSTOMER
-}
-
-enum NotificationType {
-    RESERVATION
-    DISCOUNT
-    EVENT
-    SYSTEM
+  provider = "postgresql"
 }
 
 model User {
-    id String @id @default(uuid())
-
-    email String  @unique
-    name  String?
-
-    password String?
-
-    provider AuthProvider @default(LOCAL)
-    googleId String?      @unique
-
-    profileImageUrl String?
-
-    role UserRole @default(CUSTOMER)
-
-    refreshToken String?
-
-    reservations Reservation[]
-
-    createdInventories RoomInventory[] @relation("InventoryCreator")
-
-    createdAt DateTime @default(now())
-    updatedAt DateTime @updatedAt
-
-    notificationReads NotificationRead[]
-    expoPushToken String?
+  id                 String             @id @default(uuid())
+  email              String             @unique
+  name               String?
+  password           String?
+  provider           AuthProvider       @default(LOCAL)
+  googleId           String?            @unique
+  profileImageUrl    String?
+  role               UserRole           @default(CUSTOMER)
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+  refreshToken       String?
+  expoPushToken      String?
+  notificationReads  NotificationRead[]
+  reservations       Reservation[]
+  createdInventories RoomInventory[]    @relation("InventoryCreator")
 }
 
 model RoomType {
-    id String @id @default(uuid())
-
-    name        String
-    description String?
-
-    size  Int
-    price Decimal @db.Decimal(10, 2)
-
-    totalCount Int
-
-    normalCapacity Int
-    maxCapacity    Int
-
-    discountPercent Int @default(0)
-
-    images    RoomImage[]
-    isDeleted Boolean     @default(false)
-    deletedAt DateTime?
-
-    reservations Reservation[]
-    inventories  RoomInventory[]
-
-    createdAt DateTime @default(now())
-    updatedAt DateTime @updatedAt
+  id              String          @id @default(uuid())
+  name            String
+  description     String?
+  size            Int
+  price           Decimal         @db.Decimal(10, 2)
+  totalCount      Int
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  maxCapacity     Int
+  normalCapacity  Int
+  discountPercent Int             @default(0)
+  deletedAt       DateTime?
+  isDeleted       Boolean         @default(false)
+  reservations    Reservation[]
+  images          RoomImage[]
+  inventories     RoomInventory[]
 }
 
 model RoomImage {
-    id String @id @default(uuid())
+  id         String   @id @default(uuid())
+  imageUrl   String
+  roomTypeId String
+  createdAt  DateTime @default(now())
+  publicId   String?
+  roomType   RoomType @relation(fields: [roomTypeId], references: [id], onDelete: Cascade)
 
-    imageUrl String
-    publicId String?
-
-    roomTypeId String
-    roomType   RoomType @relation(fields: [roomTypeId], references: [id], onDelete: Cascade)
-
-    createdAt DateTime @default(now())
-
-    @@index([roomTypeId])
+  @@index([roomTypeId])
 }
 
 model Reservation {
-    id String @id @default(uuid())
+  id         String            @id @default(uuid())
+  userId     String
+  roomTypeId String
+  checkIn    DateTime          @db.Date
+  checkOut   DateTime          @db.Date
+  status     ReservationStatus @default(PENDING)
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+  roomCount  Int               @default(1)
+  adults     Int
+  babies     Int
+  children   Int
+  totalPrice Decimal           @db.Decimal(10, 2)
+  basePrice  Decimal           @db.Decimal(10, 2)
+  discount   Int               @default(0)
+  extraFee   Decimal           @default(0) @db.Decimal(10, 2)
+  roomType   RoomType          @relation(fields: [roomTypeId], references: [id])
+  user       User              @relation(fields: [userId], references: [id])
 
-    userId String
-    user   User   @relation(fields: [userId], references: [id])
+  countryCode        String?
+  phoneNumber        String?
+  confirmationNumber String? @unique
 
-    roomTypeId String
-    roomType   RoomType @relation(fields: [roomTypeId], references: [id])
-
-    checkIn  DateTime @db.Date
-    checkOut DateTime @db.Date
-
-    roomCount Int @default(1)
-
-    adults   Int
-    children Int
-    babies   Int
-
-    basePrice  Decimal @db.Decimal(10, 2)
-    extraFee   Decimal @default(0) @db.Decimal(10, 2)
-    discount   Int     @default(0)
-    totalPrice Decimal @db.Decimal(10, 2)
-
-    status ReservationStatus @default(PENDING)
-
-    createdAt DateTime @default(now())
-    updatedAt DateTime @updatedAt
-
-    @@index([roomTypeId])
-    @@index([userId])
+  @@index([roomTypeId])
+  @@index([userId])
+  @@index([confirmationNumber])
 }
 
 model Notification {
-    id        String           @id @default(uuid())
-    title     String
-    message   String
-    type      NotificationType
-    createdAt DateTime         @default(now())
-
-    reads NotificationRead[]
+  id        String             @id @default(uuid())
+  title     String
+  message   String
+  type      NotificationType
+  createdAt DateTime           @default(now())
+  reads     NotificationRead[]
 }
 
 model NotificationRead {
-    id             String @id @default(uuid())
-    notificationId String
-    userId         String
+  id             String       @id @default(uuid())
+  notificationId String
+  userId         String
+  isRead         Boolean      @default(false)
+  readAt         DateTime?
+  notification   Notification @relation(fields: [notificationId], references: [id])
+  user           User         @relation(fields: [userId], references: [id])
 
-    isRead Boolean   @default(false)
-    readAt DateTime?
-
-    notification Notification @relation(fields: [notificationId], references: [id])
-    user         User         @relation(fields: [userId], references: [id])
-
-    @@unique([notificationId, userId])
+  @@unique([notificationId, userId])
 }
 
 model RoomInventory {
-    id String @id @default(uuid())
+  id             String   @id @default(uuid())
+  roomTypeId     String
+  date           DateTime @db.Date
+  availableCount Int
+  blockedCount   Int      @default(0)
+  createdById    String?
+  reason         String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  createdBy      User?    @relation("InventoryCreator", fields: [createdById], references: [id])
+  roomType       RoomType @relation(fields: [roomTypeId], references: [id], onDelete: Cascade)
 
-    roomTypeId String
-    roomType   RoomType @relation(fields: [roomTypeId], references: [id], onDelete: Cascade)
+  @@unique([roomTypeId, date])
+  @@index([roomTypeId, date])
+  @@index([date])
+}
 
-    date DateTime @db.Date
+enum ReservationStatus {
+  PENDING
+  CONFIRMED
+  CANCELLED
+}
 
-    availableCount Int
-    blockedCount   Int @default(0)
+enum AuthProvider {
+  LOCAL
+  GOOGLE
+}
 
-    createdById String?
-    createdBy   User?   @relation("InventoryCreator", fields: [createdById], references: [id])
+enum UserRole {
+  ADMIN
+  CUSTOMER
+}
 
-    reason String?
-
-    createdAt DateTime @default(now())
-    updatedAt DateTime @updatedAt
-
-    @@unique([roomTypeId, date])
-    @@index([roomTypeId, date])
-    @@index([date])
+enum NotificationType {
+  RESERVATION
+  DISCOUNT
+  EVENT
+  SYSTEM
 }

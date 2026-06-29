@@ -9,19 +9,22 @@ import { CreateReservationDto } from './dtos/create-reservation.dto';
 import { UpdateReservationDto } from './dtos/update-reservation.dto';
 import { NotificationType, UserRole } from '@prisma/client';
 import { NotificationsGateway } from '../notifications/notifications.gateway';
-import { Expo } from "expo-server-sdk";
+import { Expo } from 'expo-server-sdk';
+import { Reservation } from './dtos/reservation-list-reponse.dto';
+import { MailService } from '../mail/mail.service';
 @Injectable()
 export class ReservationsService {
-    private expo: Expo;
+  private expo: Expo;
 
   constructor(
     private prisma: PrismaService,
     private notificationsGateway: NotificationsGateway,
+    private readonly mailService: MailService,
   ) {
     this.expo = new Expo();
   }
-  
-  async getAllReservations() {
+
+  async getAllReservations(): Promise<Reservation[]> {
     return this.prisma.reservation.findMany({
       include: {
         user: true,
@@ -37,6 +40,7 @@ export class ReservationsService {
       where: { userId },
       include: {
         roomType: true,
+        user:true
       },
     });
   }
@@ -343,103 +347,133 @@ export class ReservationsService {
     //   },
     // });
 
-   const result = await this.prisma.$transaction(async (tx) => {
-  const createdReservation = await tx.reservation.create({
-    data: {
-      userId: data.userId,
-      roomTypeId: data.roomTypeId,
-      checkIn: start,
-      checkOut: end,
-      roomCount: data.roomCount,
-      adults: data.adults,
-      children: data.children,
-      babies: data.babies,
-      basePrice,
-      extraFee,
-      discount: discountPercent,
-      totalPrice,
-    },
-  });
+    const result = await this.prisma.$transaction(async (tx) => {
+      const createdReservation = await tx.reservation.create({
+        data: {
+          userId: data.userId,
+          roomTypeId: data.roomTypeId,
+          checkIn: start,
+          checkOut: end,
+          roomCount: data.roomCount,
+          adults: data.adults,
+          children: data.children,
+          babies: data.babies,
+          basePrice,
+          extraFee,
+          discount: discountPercent,
+          totalPrice,
+          countryCode: data.countryCode,
+          phoneNumber: data.phoneNumber,
+        },
+      });
 
-  const user = await tx.user.findUnique({
-    where: {
-      id: data.userId,
-    },
-  });
+      const user = await tx.user.findUnique({
+        where: {
+          id: data.userId,
+        },
+      });
 
-  const notification = await tx.notification.create({
-    data: {
-      title: "New Reservation",
-      message: `${user?.name ?? "User"} booked room from ${
-        start.toISOString().split("T")[0]
-      } to ${
-        end.toISOString().split("T")[0]
-      }`,
-      type: NotificationType.RESERVATION,
-    },
-  });
+      const notification = await tx.notification.create({
+        data: {
+          title: 'New Reservation',
+          message: `${user?.name ?? 'User'} booked room from ${
+            start.toISOString().split('T')[0]
+          } to ${end.toISOString().split('T')[0]}`,
+          type: NotificationType.RESERVATION,
+        },
+      });
 
-  const admins = await tx.user.findMany({
-    where: {
-      role: UserRole.ADMIN,
-    },
-    select: {
-      id: true,
-      expoPushToken: true,
-    },
-  });
-console.log(admins)
-  await tx.notificationRead.createMany({
-    data: admins.map((admin) => ({
-      userId: admin.id,
-      notificationId: notification.id,
-      isRead: false,
-    })),
-  });
+      const admins = await tx.user.findMany({
+        where: {
+          role: UserRole.ADMIN,
+        },
+        select: {
+          id: true,
+          expoPushToken: true,
+        },
+      });
+      //console.log(admins);
+      await tx.notificationRead.createMany({
+        data: admins.map((admin) => ({
+          userId: admin.id,
+          notificationId: notification.id,
+          isRead: false,
+        })),
+      });
 
-  return {
-    createdReservation,
-    notification,
-    admins,
-  };
-});
+      return {
+        createdReservation,
+        notification,
+        admins,
+        user,
+      };
+    });
+    try {
+      await this.mailService.sendReservationEmail(result.user.email, {
+        reservationId: result.createdReservation.id,
+        confirmationCode: result.createdReservation.id.slice(0, 8),
+        status: result.createdReservation.status,
+        createdAt: result.createdReservation.createdAt.toLocaleDateString(),
 
-// SOCKET
-this.notificationsGateway.sendToUsers(
-  result.admins.map((a) => a.id),
-  result.notification,
-);
+        guestName: result.user.name,
+        guestEmail: result.user.email,
 
-// PUSH NOTIFICATION
-const messages = result.admins
-  .filter(
-    (admin) =>
-      admin.expoPushToken &&
-      Expo.isExpoPushToken(admin.expoPushToken)
-  )
-  .map((admin) => ({
-    to: admin.expoPushToken!,
-    sound: "default",
-    title: result.notification.title,
-    body: result.notification.message,
-    data: {
-      notificationId: result.notification.id,
-      type: result.notification.type,
-    },
-  }));
+        phoneNumber: result.createdReservation.phoneNumber,
+        countryCode: result.createdReservation.countryCode,
 
-if (messages.length > 0) {
- try {
-  const result = await this.expo.sendPushNotificationsAsync(
-    messages
-  );
-  console.log(result)
- } catch (error:any) {
-  console.log(error)
- }
-}
+        roomName: roomType.name,
+        roomCount: result.createdReservation.roomCount,
 
-return result.createdReservation;
+        checkIn: result.createdReservation.checkIn.toLocaleDateString(),
+        checkOut: result.createdReservation.checkOut.toLocaleDateString(),
+
+        nights,
+
+        adults: result.createdReservation.adults,
+        children: result.createdReservation.children,
+        babies: result.createdReservation.babies,
+
+        basePrice: Number(result.createdReservation.basePrice),
+        extraFee: Number(result.createdReservation.extraFee),
+        discount: result.createdReservation.discount,
+        totalPrice: Number(result.createdReservation.totalPrice),
+      });
+    } catch (error) {
+      console.error('Failed to send reservation email:', error);
+    }
+    // SOCKET
+    this.notificationsGateway.sendToUsers(
+      result.admins.map((a) => a.id),
+      result.notification,
+    );
+
+    // PUSH NOTIFICATION
+    const messages = result.admins
+      .filter(
+        (admin) =>
+          admin.expoPushToken && Expo.isExpoPushToken(admin.expoPushToken),
+      )
+      .map((admin) => ({
+        to: admin.expoPushToken!,
+        sound: 'default',
+        title: result.notification.title,
+        body: result.notification.message,
+        data: {
+          notificationId: result.notification.id,
+          type: result.notification.type,
+        },
+      }));
+
+    if (messages.length > 0) {
+      try {
+        const result = await this.expo.sendPushNotificationsAsync(messages);
+        console.log(result);
+      } catch (error: any) {
+        console.log(error);
+      }
+    }
+
+    return result.createdReservation;
   }
   // async updateReservation({
   //   id,

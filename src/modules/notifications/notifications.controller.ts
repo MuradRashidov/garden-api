@@ -17,17 +17,15 @@ import { UserRole } from '@prisma/client';
 @Controller('notifications')
 @UseGuards(JwtAuthGuard)
 export class NotificationsController {
-  constructor(
-    private readonly notificationsService: NotificationsService,
-  ) {}
+  constructor(private readonly notificationsService: NotificationsService) {}
 
   // =========================
   // GET ALL (USER BASED)
   // =========================
   @Get()
   @Roles('ADMIN', 'CUSTOMER')
-  findAll(@Req() req: RequestWithUser) {
-    return this.notificationsService.findAll(
+  async findAll(@Req() req: RequestWithUser) {
+    return await this.notificationsService.findAll(
       req.user.id,
       req.user.role as UserRole,
     );
@@ -38,8 +36,8 @@ export class NotificationsController {
   // =========================
   @Get('unread')
   @Roles('ADMIN', 'CUSTOMER')
-  getUnread(@Req() req: RequestWithUser) {
-    return this.notificationsService.findUnread(
+  async getUnread(@Req() req: RequestWithUser) {
+    return await this.notificationsService.findUnread(
       req.user.id,
       req.user.role as UserRole,
     );
@@ -50,14 +48,8 @@ export class NotificationsController {
   // =========================
   @Patch(':id/read')
   @Roles('ADMIN', 'CUSTOMER')
-  markAsRead(
-    @Req() req: RequestWithUser,
-    @Param('id') id: string,
-  ) {
-    return this.notificationsService.markAsRead(
-      req.user.id,
-      id,
-    );
+  markAsRead(@Req() req: RequestWithUser, @Param('id') id: string) {
+    return this.notificationsService.markAsRead(req.user.id, id);
   }
 
   // =========================
@@ -66,9 +58,7 @@ export class NotificationsController {
   @Patch('read-all')
   @Roles('ADMIN', 'CUSTOMER')
   markAll(@Req() req: RequestWithUser) {
-    return this.notificationsService.markAllAsRead(
-      req.user.id,
-    );
+    return this.notificationsService.markAllAsRead(req.user.id);
   }
 
   // =========================

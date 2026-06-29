@@ -1,4 +1,11 @@
-import { IsDateString, IsInt, IsUUID, Min } from "class-validator";
+import {
+  IsDateString,
+  IsInt,
+  IsPhoneNumber,
+  IsString,
+  IsUUID,
+  Min,
+} from "class-validator";
 
 export class CreateReservationDto {
   @IsUUID()
@@ -25,4 +32,10 @@ export class CreateReservationDto {
   @IsInt()
   @Min(0)
   babies: number;
+
+  @IsString()
+  countryCode: string;
+
+  @IsString()
+  phoneNumber: string;
 }
