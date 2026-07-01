@@ -13,7 +13,8 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
 import { MailModule } from './modules/mail/mail.module';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { APP_GUARD } from '@nestjs/core';
-import dns from 'node:dns';
+import * as dns from 'node:dns';
+
 dns.setDefaultResultOrder('ipv4first');
 
 @Module({
