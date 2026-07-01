@@ -6,10 +6,10 @@
   "private": true,
   "license": "UNLICENSED",
   "scripts": {
-     "build": "nest build",
-    "start": "nest start",
+    "postinstall": "prisma generate",
+    "build": "nest build",
     "start:prod": "node dist/main",
-    "railway:start": "npx prisma migrate deploy && node dist/main",
+    "railway:start": "prisma migrate deploy && node dist/main",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "start:dev": "nest start --watch",
     "start:debug": "nest start --debug --watch",
