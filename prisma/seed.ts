@@ -120,16 +120,28 @@ const roomTypes = [
 
 async function main() {
    // ADMIN
-  await prisma.user.create({
-    data: {
-      email: "admin@garden.com",
-      name: "System Admin",
-      password: "hashed_password",
-      role: UserRole.ADMIN,
-      provider: AuthProvider.LOCAL,
-    },
-  });
-
+  // await prisma.user.create({
+  //   data: {
+  //     email: "admin@garden.com",
+  //     name: "System Admin",
+  //     password: "hashed_password",
+  //     role: UserRole.ADMIN,
+  //     provider: AuthProvider.LOCAL,
+  //   },
+  // });
+await prisma.user.upsert({
+  where: {
+    email: "admin@garden.com",
+  },
+  update: {},
+  create: {
+    email: "admin@garden.com",
+    name: "System Admin",
+    password: "hashed_password",
+    role: UserRole.ADMIN,
+    provider: AuthProvider.LOCAL,
+  },
+});
   // CUSTOMER
   const customer = await prisma.user.create({
     data: {
