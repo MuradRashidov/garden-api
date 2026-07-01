@@ -143,15 +143,19 @@ await prisma.user.upsert({
   },
 });
   // CUSTOMER
-  const customer = await prisma.user.create({
-    data: {
-      email: "user@garden.com",
-      name: "Murad",
-      password: "hashed_password",
-      role: UserRole.CUSTOMER,
-      provider: AuthProvider.LOCAL,
-    },
-  });
+ const customer = await prisma.user.upsert({
+  where: {
+    email: "user@garden.com",
+  },
+  update: {},
+  create: {
+    email: "user@garden.com",
+    name: "Murad",
+    password: "hashed_password",
+    role: UserRole.CUSTOMER,
+    provider: AuthProvider.LOCAL,
+  },
+});
   for (const room of roomTypes) {
     await prisma.roomType.create({
       data: {
