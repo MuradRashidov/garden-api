@@ -3,7 +3,7 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { PrismaModule } from './prisma/prisma/prisma.module';
 import { RoomsModule } from './modules/rooms/rooms.module';
-import { PrismaService } from './prisma/prisma/prisma.service';
+
 import { ReservationsModule } from './modules/reservations/reservations.module';
 import { UsersModule } from './modules/users/users.module';
 import { AuthModule } from './modules/auth/auth.module';
@@ -13,6 +13,9 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
 import { MailModule } from './modules/mail/mail.module';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { APP_GUARD } from '@nestjs/core';
+import dns from 'node:dns';
+dns.setDefaultResultOrder('ipv4first');
+
 @Module({
   imports: [
     PrismaModule,
@@ -26,17 +29,20 @@ import { APP_GUARD } from '@nestjs/core';
     ThrottlerModule.forRoot([
       {
         ttl: 60_000, // 1 dəqiqə
-        limit: 100,  // 100 sorğu
-      }]),
+        limit: 100, // 100 sorğu
+      },
+    ]),
     CloudinaryModule,
     NotificationsModule,
     MailModule,
-
   ],
   controllers: [AppController],
-  providers: [AppService,{
+  providers: [
+    AppService,
+    {
       provide: APP_GUARD,
       useClass: ThrottlerGuard,
-    },],
+    },
+  ],
 })
 export class AppModule {}
